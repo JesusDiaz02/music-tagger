@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+shazamio
+mutagen
+pydub
+
+# Requiere ffmpeg en el sistema (macOS: brew install ffmpeg)
+#source .venv/bin/activate
+#python app.py

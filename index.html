@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Music Tagger</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#0f0f13; color:#e0e0f0; font-family:system-ui,sans-serif; }
+  input[type=text] { background:#1e1e2e; border:1px solid #2a2a3e; color:#e0e0f0; border-radius:6px; padding:6px 10px; }
+  input[type=text]:focus { outline:2px solid #6366f1; border-color:transparent; }
+  .file-item { border-bottom:1px solid #1a1a28; cursor:pointer; transition:background 0.1s; }
+  .file-item:hover { background:#1a1a2e; }
+  .file-item.active { background:#1c1c38; border-left:3px solid #6366f1; }
+  .fbtn { background:#22223a; color:#9ca3af; border-radius:5px; padding:3px 10px; font-size:12px; transition:all 0.1s; }
+  .fbtn:hover { background:#2d2d50; color:#e0e0f0; }
+  .fbtn.on { background:#3730a3; color:#c7d2fe; }
+  ::-webkit-scrollbar { width:5px; }
+  ::-webkit-scrollbar-thumb { background:#2a2a3e; border-radius:3px; }
+  .s-pending  { color:#9ca3af; }
+  .s-identified { color:#60a5fa; }
+  .s-done     { color:#34d399; }
+  .s-skipped  { color:#4b5563; }
+  .s-not_found{ color:#f87171; }
+  .s-error    { color:#fb923c; }
+</style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+<!-- Header -->
+<div style="background:#12121c;border-bottom:1px solid #22223a;" class="flex items-center gap-3 px-4 py-2.5">
+  <span class="font-semibold text-indigo-300">🎵 Music Tagger</span>
+  <div class="flex items-center gap-1.5" style="flex:1;max-width:560px;">
+    <input type="text" id="pathInput" placeholder="/ruta/a/tu/musica" style="flex:1;min-width:0;" onkeydown="if(event.key==='Enter')doScan()">
+    <button type="button" id="btnBrowse" onclick="browseFolder()" title="Buscar carpeta"
+      class="flex-shrink-0 px-2.5 py-1.5 rounded text-sm font-medium"
+      style="background:#22223a;color:#c7d2fe;border:1px solid #2a2a3e;">
+      📁
+    </button>
+  </div>
+  <button onclick="doScan()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-1.5 rounded text-sm font-medium">Escanear</button>
+</div>
+
+<!-- Stats -->
+<div id="statsBar" class="hidden flex gap-4 px-4 py-1.5 text-xs" style="background:#0d0d18;border-bottom:1px solid #1a1a28;">
+  <span class="text-gray-500">Total <b id="sTotal" class="text-gray-300">0</b></span>
+  <span class="text-yellow-600">Pendiente <b id="sPending" class="text-yellow-400">0</b></span>
+  <span class="text-blue-600">Identificado <b id="sIdentified" class="text-blue-400">0</b></span>
+  <span class="text-green-700">Guardado <b id="sDone" class="text-green-400">0</b></span>
+  <span class="text-gray-600">Omitido <b id="sSkipped" class="text-gray-400">0</b></span>
+  <span class="text-red-700">No encontrado <b id="sNotFound" class="text-red-400">0</b></span>
+</div>
+
+<!-- Body -->
+<div class="flex flex-1 overflow-hidden">
+
+  <!-- LEFT: File list -->
+  <div style="width:360px;min-width:280px;border-right:1px solid #1e1e2e;" class="flex flex-col">
+
+    <!-- Toolbar -->
+    <div style="border-bottom:1px solid #1e1e2e;" class="p-2 flex flex-col gap-1.5">
+      <div class="flex flex-wrap gap-1">
+        <button class="fbtn on" id="f-all"       onclick="setFilter('all')">Todos</button>
+        <button class="fbtn"    id="f-pending"   onclick="setFilter('pending')">Pendiente</button>
+        <button class="fbtn"    id="f-identified" onclick="setFilter('identified')">Identificado</button>
+        <button class="fbtn"    id="f-done"      onclick="setFilter('done')">Guardado</button>
+        <button class="fbtn"    id="f-not_found" onclick="setFilter('not_found')">No encontrado</button>
+        <button class="fbtn"    id="f-skipped"   onclick="setFilter('skipped')">Omitido</button>
+      </div>
+      <div class="flex gap-1.5">
+        <button id="btnBulk" onclick="toggleBulk()"
+          class="flex-1 text-xs py-1.5 rounded font-medium text-indigo-200"
+          style="background:#312e81;">
+          ⚡ Identificar todos los pendientes
+        </button>
+        <button onclick="loadFiles()" class="fbtn text-xs px-2">↻</button>
+      </div>
+      <div id="bulkProg" class="hidden text-xs px-1" style="color:#7070a0;"></div>
+    </div>
+
+    <!-- List -->
+    <div id="fileList" class="flex-1 overflow-y-auto text-sm"></div>
+
+    <!-- Pagination -->
+    <div id="pgBar" class="hidden flex justify-between items-center px-3 py-2 text-xs" style="border-top:1px solid #1e1e2e;color:#5050a0;">
+      <button onclick="prevPage()" id="btnPrev" class="fbtn disabled:opacity-30">← Ant</button>
+      <span id="pgInfo"></span>
+      <button onclick="nextPage()" id="btnNext" class="fbtn disabled:opacity-30">Sig →</button>
+    </div>
+  </div>
+
+  <!-- RIGHT: Detail -->
+  <div id="detail" class="flex-1 overflow-y-auto p-5">
+    <div class="h-full flex items-center justify-center text-sm" style="color:#303050;">
+      Selecciona un archivo de la lista para identificarlo
+    </div>
+  </div>
+
+</div>
+
+<script>
+const S = {
+  path: '',
+  files: [],
+  total: 0,
+  page: 0,
+  pageSize: 100,
+  filter: 'all',
+  selected: null,
+  bulkRunning: false,
+  bulkStop: false,
+};
+
+const SL = {
+  pending:    ['⏳','Pendiente'],
+  identified: ['🔵','Identificado'],
+  done:       ['✅','Guardado'],
+  skipped:    ['⏭️','Omitido'],
+  not_found:  ['❌','No encontrado'],
+  error:      ['⚠️','Error'],
+};
+
+async function api(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: {'Content-Type':'application/json'},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return r.json();
+}
+
+async function browseFolder() {
+  const btn = document.getElementById('btnBrowse');
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  try {
+    const data = await api('POST', '/pick-folder');
+    if (data.path) {
+      document.getElementById('pathInput').value = data.path;
+      localStorage.setItem('musicTaggerPath', data.path);
+      await doScan();
+    }
+  } catch (e) {
+    alert('No se pudo abrir el selector de carpetas. Ingresa la ruta manualmente.');
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
+
+async function doScan() {
+  const path = document.getElementById('pathInput').value.trim();
+  if (!path) { alert('Ingresa o selecciona la carpeta con tus MP3'); return; }
+  S.path = path;
+  localStorage.setItem('musicTaggerPath', path);
+  S.page = 0; S.filter = 'all';
+  setActiveFilter('all');
+  await loadFiles();
+}
+
+(function restoreLastPath() {
+  const saved = localStorage.getItem('musicTaggerPath');
+  if (saved) document.getElementById('pathInput').value = saved;
+})();
+
+async function loadFiles() {
+  if (!S.path) return;
+  const off = S.page * S.pageSize;
+  const data = await api('POST', `/scan?offset=${off}&limit=${S.pageSize}&filter=${encodeURIComponent(S.filter)}`, {path: S.path});
+  S.files = data.files || [];
+  S.total = data.total || 0;
+
+  const c = data.counts || {};
+  const all = Object.values(c).reduce((a, b) => a + b, 0);
+  document.getElementById('sTotal').textContent      = all;
+  document.getElementById('sPending').textContent    = c.pending    || 0;
+  document.getElementById('sIdentified').textContent = c.identified || 0;
+  document.getElementById('sDone').textContent       = c.done       || 0;
+  document.getElementById('sSkipped').textContent    = c.skipped    || 0;
+  document.getElementById('sNotFound').textContent   = c.not_found  || 0;
+  document.getElementById('statsBar').classList.remove('hidden');
+
+  renderList();
+  renderPagination();
+}
+
+function renderList() {
+  const el = document.getElementById('fileList');
+  if (!S.files.length) {
+    el.innerHTML = '<div class="p-4 text-center text-xs" style="color:#303050;">No hay archivos</div>';
+    return;
+  }
+  el.innerHTML = S.files.map((f, i) => {
+    const [ico] = SL[f.status] || ['?'];
+    const name = f.tags?.title && f.tags?.artist
+      ? `${f.tags.artist} — ${f.tags.title}`
+      : (f.identified?.title && f.identified?.artist)
+        ? `${f.identified.artist} — ${f.identified.title}`
+        : f.filename;
+    const active = S.selected?.path === f.path;
+    return `<div class="file-item px-3 py-2.5 ${active ? 'active' : ''}" onclick="selectFile(${i})">
+      <div class="flex items-center gap-2">
+        <span class="flex-1 truncate" style="color:${active?'#c7d2fe':'#b0b0c8'};font-size:13px;">${h(f.filename)}</span>
+        <span class="s-${f.status} flex-shrink-0" style="font-size:13px;">${ico}</span>
+      </div>
+      <div class="truncate mt-0.5" style="font-size:11px;color:#404060;">${h(name !== f.filename ? name : '')}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderPagination() {
+  const pages = Math.ceil(S.total / S.pageSize);
+  const pg = document.getElementById('pgBar');
+  if (pages <= 1) { pg.classList.add('hidden'); return; }
+  pg.classList.remove('hidden');
+  document.getElementById('pgInfo').textContent = `Pág ${S.page+1}/${pages}  (${S.total})`;
+  document.getElementById('btnPrev').disabled = S.page === 0;
+  document.getElementById('btnNext').disabled = S.page >= pages - 1;
+}
+
+function prevPage() { if (S.page > 0) { S.page--; loadFiles(); } }
+function nextPage() { S.page++; loadFiles(); }
+
+function setFilter(f) {
+  S.filter = f; S.page = 0;
+  setActiveFilter(f);
+  loadFiles();
+}
+function setActiveFilter(f) {
+  document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('on'));
+  document.getElementById('f-'+f)?.classList.add('on');
+}
+
+function selectFile(idx) {
+  S.selected = S.files[idx];
+  renderList();
+  renderDetail();
+}
+
+function renderDetail() {
+  const f = S.selected;
+  if (!f) return;
+
+  const [ico, lbl] = SL[f.status] || ['?', f.status];
+  const has = f.identified && (f.identified.title || f.identified.artist);
+  const eTitle  = h(f.identified?.title  || f.tags?.title  || '');
+  const eArtist = h(f.identified?.artist || f.tags?.artist || '');
+  const eAlbum  = h(f.identified?.album  || f.tags?.album  || '');
+  const eYear   = h(f.identified?.year   || f.tags?.year   || '');
+  const cover   = f.identified?.cover || '';
+  const suggestName = (f.identified?.artist || f.tags?.artist) && (f.identified?.title || f.tags?.title)
+    ? h(`${f.identified?.artist || f.tags?.artist} - ${f.identified?.title || f.tags?.title}.mp3`)
+    : 'Artista - Título.mp3';
+
+  document.getElementById('detail').innerHTML = `
+  <div style="max-width:680px;margin:0 auto;">
+
+    <!-- File header -->
+    <div class="flex gap-3 mb-4 items-start">
+      ${cover ? `<img src="${cover}" alt="cover" style="width:72px;height:72px;border-radius:8px;object-fit:cover;flex-shrink:0;" onerror="this.style.display='none'">` : ''}
+      <div class="flex-1 min-w-0">
+        <div class="font-medium truncate" style="font-size:15px;">${h(f.filename)}</div>
+        <div class="s-${f.status} text-xs mt-1">${ico} ${lbl}</div>
+        ${f.status === 'error' ? `<div class="text-xs mt-1" style="color:#f87171;">Error</div>` : ''}
+      </div>
+    </div>
+
+    <!-- Player -->
+    <div class="mb-4 p-3 rounded-xl" style="background:#12121c;border:1px solid #1e1e2e;">
+      <audio controls preload="metadata" src="/audio?path=${encodeURIComponent(f.path)}" style="width:100%;height:32px;accent-color:#6366f1;"></audio>
+    </div>
+
+    <!-- Tag comparison -->
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div class="rounded-xl p-3" style="background:#12121c;border:1px solid #1e1e2e;">
+        <div class="text-xs font-semibold mb-2" style="color:#404060;letter-spacing:.05em;">TAGS ACTUALES</div>
+        ${tr('Título',  f.tags?.title)}
+        ${tr('Artista', f.tags?.artist)}
+        ${tr('Álbum',   f.tags?.album)}
+        ${tr('Año',     f.tags?.year)}
+      </div>
+      <div class="rounded-xl p-3" style="background:#12121c;border:1px solid #1e1e2e;">
+        <div class="text-xs font-semibold mb-2" style="color:#404060;letter-spacing:.05em;">SHAZAM ENCONTRÓ</div>
+        ${has
+          ? tr('Título',  f.identified?.title,  true)
+          + tr('Artista', f.identified?.artist, true)
+          + tr('Álbum',   f.identified?.album,  true)
+          + tr('Año',     f.identified?.year,   true)
+          : `<div class="text-xs" style="color:#2a2a50;">${f.status==='not_found'?'No identificado':'Sin identificar aún'}</div>`}
+      </div>
+    </div>
+
+    <!-- Edit form -->
+    <div class="rounded-xl p-4 mb-4" style="background:#12121c;border:1px solid #1e1e2e;">
+      <div class="text-xs font-semibold mb-3" style="color:#404060;letter-spacing:.05em;">EDITAR ANTES DE GUARDAR</div>
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        <div><label class="text-xs mb-1 block" style="color:#505070;">Título</label>
+          <input type="text" id="eTitle" value="${eTitle}" style="width:100%;"></div>
+        <div><label class="text-xs mb-1 block" style="color:#505070;">Artista</label>
+          <input type="text" id="eArtist" value="${eArtist}" style="width:100%;"></div>
+        <div><label class="text-xs mb-1 block" style="color:#505070;">Álbum</label>
+          <input type="text" id="eAlbum" value="${eAlbum}" style="width:100%;"></div>
+        <div><label class="text-xs mb-1 block" style="color:#505070;">Año</label>
+          <input type="text" id="eYear" value="${eYear}" style="width:80px;"></div>
+      </div>
+      <label class="flex items-center gap-2 text-xs cursor-pointer" style="color:#7070a0;">
+        <input type="checkbox" id="eRename" ${cover || has ? 'checked' : ''}>
+        <span>Renombrar archivo → <span style="color:#818cf8;">${suggestName}</span></span>
+      </label>
+    </div>
+
+    <!-- Buttons -->
+    <div class="flex gap-2">
+      <button id="btnId" onclick="doIdentify()"
+        class="flex-1 py-2.5 rounded-lg text-sm font-medium text-white transition-opacity"
+        style="background:#312e81;">
+        🔍 Identificar
+      </button>
+      <button onclick="doSave()"
+        class="flex-1 py-2.5 rounded-lg text-sm font-medium text-white"
+        style="background:#064e3b;">
+        💾 Guardar tags
+      </button>
+      <button onclick="doSkip()"
+        class="px-5 py-2.5 rounded-lg text-sm"
+        style="background:#1c1c2e;color:#6b7280;">
+        Omitir
+      </button>
+    </div>
+
+    ${f.status === 'error' ? `
+    <div class="mt-3 rounded-lg p-3 text-sm" style="background:#1a0a0a;border:1px solid #3b1111;color:#fca5a5;">
+      <div class="font-semibold mb-1" style="color:#f87171;">No se pudo identificar</div>
+      <div style="white-space:pre-wrap;line-height:1.5;">${h(f.error) || 'Error desconocido. Vuelve a pulsar Identificar o revisa la terminal donde corre python app.py.'}</div>
+    </div>` : ''}
+
+    ${f.status === 'not_found' ? `
+    <div class="mt-3 rounded-lg p-2.5 text-xs" style="background:#1a0a0a;border:1px solid #3b1111;color:#f87171;">
+      Shazam no reconoció esta canción. Puedes editar los tags manualmente y guardar igual.
+    </div>` : ''}
+  </div>`;
+}
+
+function tr(label, val, hi = false) {
+  return `<div class="text-xs mb-1 flex gap-1">
+    <span style="color:#404060;min-width:44px;">${label}:</span>
+    <span class="truncate" style="color:${hi && val ? '#a5b4fc' : val ? '#9090c0' : '#252540'};">${val ? h(val) : '—'}</span>
+  </div>`;
+}
+
+async function doIdentify() {
+  const f = S.selected;
+  if (!f) return;
+  const btn = document.getElementById('btnId');
+  btn.textContent = '🔍 Identificando...';
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+
+  const res = await api('POST', '/identify', {file_path: f.path});
+
+  const idx = S.files.findIndex(x => x.path === f.path);
+  if (idx !== -1) {
+    S.files[idx].status = res.status;
+    S.files[idx].identified = res.identified;
+    S.files[idx].error = res.error || null;
+    S.selected = S.files[idx];
+  }
+  renderList();
+  renderDetail();
+
+  btn.textContent = '🔍 Identificar';
+  btn.disabled = false;
+  btn.style.opacity = '1';
+}
+
+async function doSave() {
+  const f = S.selected;
+  if (!f) return;
+
+  const title  = document.getElementById('eTitle').value.trim();
+  const artist = document.getElementById('eArtist').value.trim();
+  const album  = document.getElementById('eAlbum').value.trim();
+  const year   = document.getElementById('eYear').value.trim();
+  const rename = document.getElementById('eRename').checked;
+
+  if (!title && !artist) { alert('Ingresa al menos título o artista'); return; }
+
+  const res = await api('POST', '/update', {file_path: f.path, title, artist, album, year, rename});
+
+  if (res.success) {
+    const idx = S.files.findIndex(x => x.path === f.path);
+    if (idx !== -1) {
+      S.files[idx].status   = 'done';
+      S.files[idx].path     = res.new_path;
+      S.files[idx].filename = res.new_path.split('/').pop();
+      S.files[idx].tags     = {title, artist, album, year};
+      S.selected = S.files[idx];
+    }
+    renderList();
+    renderDetail();
+    setTimeout(() => {
+      const next = S.files.findIndex(x => x.status === 'pending' || x.status === 'identified');
+      if (next !== -1) selectFile(next);
+    }, 400);
+  } else {
+    alert('Error: ' + (res.detail || JSON.stringify(res)));
+  }
+}
+
+async function doSkip() {
+  const f = S.selected;
+  if (!f) return;
+  await api('POST', '/skip', {file_path: f.path});
+  const idx = S.files.findIndex(x => x.path === f.path);
+  if (idx !== -1) {
+    S.files[idx].status = 'skipped';
+    const next = S.files.findIndex((x, i) => i > idx && (x.status === 'pending' || x.status === 'identified'));
+    renderList();
+    if (next !== -1) selectFile(next);
+    else renderDetail();
+  }
+}
+
+let bulkStop = false;
+
+async function toggleBulk() {
+  if (S.bulkRunning) {
+    bulkStop = true;
+    document.getElementById('btnBulk').textContent = 'Deteniendo...';
+    return;
+  }
+
+  if (!S.path) { alert('Primero escanea un directorio'); return; }
+
+  bulkStop = false;
+  S.bulkRunning = true;
+  const btn = document.getElementById('btnBulk');
+  btn.textContent = '⏹ Detener';
+  btn.style.background = '#7f1d1d';
+
+  const prog = document.getElementById('bulkProg');
+  prog.classList.remove('hidden');
+  prog.textContent = 'Cargando archivos pendientes...';
+
+  // Fetch all pending files across all pages
+  const allPending = [];
+  let off = 0;
+  const batch = 500;
+  while (!bulkStop) {
+    const data = await api('POST', `/scan?offset=${off}&limit=${batch}&filter=pending`, {path: S.path});
+    allPending.push(...(data.files || []));
+    if ((data.files || []).length < batch) break;
+    off += batch;
+  }
+
+  if (!allPending.length) {
+    prog.textContent = 'No hay archivos pendientes.';
+    S.bulkRunning = false;
+    btn.textContent = '⚡ Identificar todos los pendientes';
+    btn.style.background = '#312e81';
+    return;
+  }
+
+  prog.textContent = `${allPending.length} pendientes encontrados. Iniciando...`;
+
+  let done = 0, found = 0, notFound = 0;
+  for (const f of allPending) {
+    if (bulkStop) break;
+    prog.textContent = `${done+1}/${allPending.length} — ${f.filename.slice(0, 45)}...`;
+
+    const res = await api('POST', '/identify', {file_path: f.path});
+    if (res.status === 'identified') found++;
+    else notFound++;
+    done++;
+
+    // Refresh current view every 10 files
+    if (done % 10 === 0) await loadFiles();
+
+    // Delay to avoid Shazam rate limiting
+    await new Promise(r => setTimeout(r, 1200));
+  }
+
+  prog.textContent = `✅ Listo: ${done} procesados — ${found} identificados, ${notFound} no encontrados.`;
+  S.bulkRunning = false;
+  btn.textContent = '⚡ Identificar todos los pendientes';
+  btn.style.background = '#312e81';
+
+  await loadFiles();
+}
+
+function h(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
