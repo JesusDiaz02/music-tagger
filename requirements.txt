@@ -5,5 +5,9 @@ mutagen
 pydub
 
 # Requiere ffmpeg en el sistema (macOS: brew install ffmpeg)
+#python -m venv .venv
 #source .venv/bin/activate
+#permitir la ejeuccion de scripb Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+#.venv\Scripts\Activate.ps1 ---wind
+#pip install -r requirements.txt
 #python app.py

@@ -28,17 +28,37 @@
 <body class="h-screen flex flex-col overflow-hidden">
 
 <!-- Header -->
-<div style="background:#12121c;border-bottom:1px solid #22223a;" class="flex items-center gap-3 px-4 py-2.5">
-  <span class="font-semibold text-indigo-300">🎵 Music Tagger</span>
-  <div class="flex items-center gap-1.5" style="flex:1;max-width:560px;">
-    <input type="text" id="pathInput" placeholder="/ruta/a/tu/musica" style="flex:1;min-width:0;" onkeydown="if(event.key==='Enter')doScan()">
-    <button type="button" id="btnBrowse" onclick="browseFolder()" title="Buscar carpeta"
-      class="flex-shrink-0 px-2.5 py-1.5 rounded text-sm font-medium"
-      style="background:#22223a;color:#c7d2fe;border:1px solid #2a2a3e;">
-      📁
-    </button>
+<div style="background:#12121c;border-bottom:1px solid #22223a;" class="flex flex-col md:flex-row md:items-center gap-4 px-4 py-3">
+  <div class="flex items-center gap-2">
+    <span class="font-semibold text-indigo-300 flex-shrink-0">🎵 Music Tagger</span>
   </div>
-  <button onclick="doScan()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-1.5 rounded text-sm font-medium">Escanear</button>
+  <div class="flex flex-1 flex-col sm:flex-row gap-3">
+    <!-- Origen -->
+    <div class="flex items-center gap-1.5 flex-1">
+      <span class="text-xs text-gray-400 font-medium w-14 flex-shrink-0">Origen:</span>
+      <input type="text" id="pathInput" placeholder="/ruta/a/tu/musica" style="flex:1;min-width:0;" onkeydown="if(event.key==='Enter')doScan()">
+      <button type="button" id="btnBrowse" onclick="browseFolder()" title="Buscar carpeta origen"
+        class="flex-shrink-0 px-2.5 py-1.5 rounded text-sm font-medium"
+        style="background:#22223a;color:#c7d2fe;border:1px solid #2a2a3e;">
+        📁
+      </button>
+    </div>
+    <!-- Destino -->
+    <div class="flex items-center gap-1.5 flex-1">
+      <span class="text-xs text-gray-400 font-medium w-14 flex-shrink-0 text-left sm:text-right">Destino:</span>
+      <input type="text" id="destPathInput" placeholder="/carpeta/de/destino (opcional)" style="flex:1;min-width:0;" onchange="saveDestPath()">
+      <button type="button" id="btnBrowseDest" onclick="browseDestFolder()" title="Buscar carpeta destino"
+        class="flex-shrink-0 px-2.5 py-1.5 rounded text-sm font-medium"
+        style="background:#22223a;color:#c7d2fe;border:1px solid #2a2a3e;">
+        📁
+      </button>
+      <button type="button" onclick="clearDestFolder()" title="Limpiar destino"
+        class="flex-shrink-0 px-2 py-1.5 rounded text-xs font-medium bg-red-950 text-red-300 border border-red-900 hover:bg-red-900 transition-colors">
+        ✕
+      </button>
+    </div>
+  </div>
+  <button id="btnScan" onclick="doScan()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-1.5 rounded text-sm font-medium flex-shrink-0 self-end md:self-auto transition-all">Escanear</button>
 </div>
 
 <!-- Stats -->
@@ -109,6 +129,7 @@ const S = {
   selected: null,
   bulkRunning: false,
   bulkStop: false,
+  customDestPath: '',
 };
 
 const SL = {
@@ -148,6 +169,40 @@ async function browseFolder() {
   }
 }
 
+async function browseDestFolder() {
+  const btn = document.getElementById('btnBrowseDest');
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  try {
+    const data = await api('POST', '/pick-folder');
+    if (data.path) {
+      document.getElementById('destPathInput').value = data.path;
+      saveDestPath();
+    }
+  } catch (e) {
+    alert('No se pudo abrir el selector de carpetas. Ingresa la ruta manualmente.');
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
+
+function saveDestPath() {
+  const path = document.getElementById('destPathInput').value.trim();
+  localStorage.setItem('musicTaggerDestPath', path);
+  if (S.selected) {
+    renderDetail();
+  }
+}
+
+function clearDestFolder() {
+  document.getElementById('destPathInput').value = '';
+  localStorage.removeItem('musicTaggerDestPath');
+  if (S.selected) {
+    renderDetail();
+  }
+}
+
 async function doScan() {
   const path = document.getElementById('pathInput').value.trim();
   if (!path) { alert('Ingresa o selecciona la carpeta con tus MP3'); return; }
@@ -158,30 +213,65 @@ async function doScan() {
   await loadFiles();
 }
 
-(function restoreLastPath() {
+(function restoreLastPaths() {
   const saved = localStorage.getItem('musicTaggerPath');
   if (saved) document.getElementById('pathInput').value = saved;
+  const savedDest = localStorage.getItem('musicTaggerDestPath');
+  if (savedDest) document.getElementById('destPathInput').value = savedDest;
 })();
 
 async function loadFiles() {
   if (!S.path) return;
-  const off = S.page * S.pageSize;
-  const data = await api('POST', `/scan?offset=${off}&limit=${S.pageSize}&filter=${encodeURIComponent(S.filter)}`, {path: S.path});
-  S.files = data.files || [];
-  S.total = data.total || 0;
+  
+  const btnScan = document.getElementById('btnScan');
+  if (btnScan) {
+    btnScan.disabled = true;
+    btnScan.textContent = 'Escaneando...';
+    btnScan.style.opacity = '0.7';
+  }
+  
+  const listEl = document.getElementById('fileList');
+  if (listEl) {
+    listEl.innerHTML = `
+      <div class="p-8 text-center text-sm text-gray-500 flex flex-col items-center justify-center gap-3">
+        <svg class="animate-spin h-6 w-6 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span>Buscando canciones...</span>
+      </div>
+    `;
+  }
 
-  const c = data.counts || {};
-  const all = Object.values(c).reduce((a, b) => a + b, 0);
-  document.getElementById('sTotal').textContent      = all;
-  document.getElementById('sPending').textContent    = c.pending    || 0;
-  document.getElementById('sIdentified').textContent = c.identified || 0;
-  document.getElementById('sDone').textContent       = c.done       || 0;
-  document.getElementById('sSkipped').textContent    = c.skipped    || 0;
-  document.getElementById('sNotFound').textContent   = c.not_found  || 0;
-  document.getElementById('statsBar').classList.remove('hidden');
+  try {
+    const off = S.page * S.pageSize;
+    const data = await api('POST', `/scan?offset=${off}&limit=${S.pageSize}&filter=${encodeURIComponent(S.filter)}`, {path: S.path});
+    S.files = data.files || [];
+    S.total = data.total || 0;
 
-  renderList();
-  renderPagination();
+    const c = data.counts || {};
+    const all = Object.values(c).reduce((a, b) => a + b, 0);
+    document.getElementById('sTotal').textContent      = all;
+    document.getElementById('sPending').textContent    = c.pending    || 0;
+    document.getElementById('sIdentified').textContent = c.identified || 0;
+    document.getElementById('sDone').textContent       = c.done       || 0;
+    document.getElementById('sSkipped').textContent    = c.skipped    || 0;
+    document.getElementById('sNotFound').textContent   = c.not_found  || 0;
+    document.getElementById('statsBar').classList.remove('hidden');
+
+    renderList();
+    renderPagination();
+  } catch (e) {
+    if (listEl) {
+      listEl.innerHTML = `<div class="p-4 text-center text-xs text-red-400">Error al escanear: ${e.message || e}</div>`;
+    }
+  } finally {
+    if (btnScan) {
+      btnScan.disabled = false;
+      btnScan.textContent = 'Escanear';
+      btnScan.style.opacity = '1';
+    }
+  }
 }
 
 function renderList() {
@@ -233,6 +323,7 @@ function setActiveFilter(f) {
 
 function selectFile(idx) {
   S.selected = S.files[idx];
+  S.customDestPath = '';
   renderList();
   renderDetail();
 }
@@ -251,6 +342,10 @@ function renderDetail() {
   const suggestName = (f.identified?.artist || f.tags?.artist) && (f.identified?.title || f.tags?.title)
     ? h(`${f.identified?.artist || f.tags?.artist} - ${f.identified?.title || f.tags?.title}.mp3`)
     : 'Artista - Título.mp3';
+
+  const defaultDest = document.getElementById('destPathInput')?.value.trim() || '';
+  const hasDefaultDest = defaultDest !== '';
+  const isMoveChecked = hasDefaultDest || S.customDestPath !== '';
 
   document.getElementById('detail').innerHTML = `
   <div style="max-width:680px;margin:0 auto;">
@@ -303,10 +398,51 @@ function renderDetail() {
         <div><label class="text-xs mb-1 block" style="color:#505070;">Año</label>
           <input type="text" id="eYear" value="${eYear}" style="width:80px;"></div>
       </div>
-      <label class="flex items-center gap-2 text-xs cursor-pointer" style="color:#7070a0;">
+      <label class="flex items-center gap-2 text-xs cursor-pointer mb-2" style="color:#7070a0;">
         <input type="checkbox" id="eRename" ${cover || has ? 'checked' : ''}>
         <span>Renombrar archivo → <span style="color:#818cf8;">${suggestName}</span></span>
       </label>
+      
+      <!-- Opciones de traslado de archivo -->
+      <div class="mt-3 pt-3 border-t" style="border-color:#1e1e2e;">
+        <label class="flex items-center gap-2 text-xs cursor-pointer text-indigo-300 font-medium">
+          <input type="checkbox" id="eMove" ${isMoveChecked ? 'checked' : ''} onchange="toggleMoveOptions()">
+          <span>Mover archivo al guardar</span>
+        </label>
+        
+        <div id="moveOptions" class="mt-2 ml-5 ${isMoveChecked ? '' : 'hidden'} flex flex-col gap-2">
+          <!-- Opción 1: Carpeta predeterminada -->
+          <div class="flex items-start gap-2">
+            <input type="radio" name="moveTarget" id="moveDestDefault" value="default" ${hasDefaultDest && S.customDestPath === '' ? 'checked' : ''} ${!hasDefaultDest ? 'disabled' : ''} onchange="updateDestChoice()">
+            <div class="flex flex-col">
+              <label for="moveDestDefault" class="text-xs ${hasDefaultDest ? 'text-gray-300' : 'text-gray-500 cursor-not-allowed'}">
+                Carpeta predeterminada:
+              </label>
+              <span id="destDefaultLabel" class="text-[11px] font-mono break-all ${hasDefaultDest ? 'text-indigo-400' : 'text-gray-600'}">
+                ${hasDefaultDest ? h(defaultDest) : 'No configurada (defínela en la cabecera)'}
+              </span>
+            </div>
+          </div>
+          
+          <!-- Opción 2: Carpeta específica -->
+          <div class="flex items-start gap-2">
+            <input type="radio" name="moveTarget" id="moveDestCustom" value="custom" ${S.customDestPath !== '' || !hasDefaultDest ? 'checked' : ''} onchange="updateDestChoice()">
+            <div class="flex flex-col flex-1">
+              <label for="moveDestCustom" class="text-xs text-gray-300">
+                Carpeta específica:
+              </label>
+              <div class="flex items-center gap-2 mt-1">
+                <span id="destCustomLabel" class="text-[11px] font-mono break-all text-yellow-500 flex-1">
+                  ${S.customDestPath ? h(S.customDestPath) : 'Ninguna carpeta seleccionada'}
+                </span>
+                <button type="button" onclick="browseCustomFolder()" class="px-2 py-1 rounded text-[11px] bg-indigo-950 text-indigo-200 border border-indigo-900 hover:bg-indigo-900 transition-colors">
+                  Elegir...
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Buttons -->
@@ -373,6 +509,33 @@ async function doIdentify() {
   btn.style.opacity = '1';
 }
 
+function toggleMoveOptions() {
+  const checked = document.getElementById('eMove').checked;
+  const opts = document.getElementById('moveOptions');
+  if (checked) {
+    opts.classList.remove('hidden');
+  } else {
+    opts.classList.add('hidden');
+  }
+}
+
+function updateDestChoice() {}
+
+async function browseCustomFolder() {
+  try {
+    const data = await api('POST', '/pick-folder');
+    if (data.path) {
+      S.customDestPath = data.path;
+      const lbl = document.getElementById('destCustomLabel');
+      if (lbl) lbl.textContent = data.path;
+      const radio = document.getElementById('moveDestCustom');
+      if (radio) radio.checked = true;
+    }
+  } catch (e) {
+    alert('No se pudo abrir el selector de carpetas.');
+  }
+}
+
 async function doSave() {
   const f = S.selected;
   if (!f) return;
@@ -385,14 +548,40 @@ async function doSave() {
 
   if (!title && !artist) { alert('Ingresa al menos título o artista'); return; }
 
-  const res = await api('POST', '/update', {file_path: f.path, title, artist, album, year, rename});
+  let dest_folder = '';
+  if (document.getElementById('eMove').checked) {
+    const isDefault = document.getElementById('moveDestDefault').checked;
+    if (isDefault) {
+      dest_folder = document.getElementById('destPathInput').value.trim();
+      if (!dest_folder) {
+        alert('Por favor selecciona una carpeta de destino predeterminada en el Header primero, o elige una carpeta específica.');
+        return;
+      }
+    } else {
+      dest_folder = S.customDestPath || '';
+      if (!dest_folder) {
+        alert('Por favor selecciona una carpeta específica para esta canción.');
+        return;
+      }
+    }
+  }
+
+  const res = await api('POST', '/update', {
+    file_path: f.path,
+    title,
+    artist,
+    album,
+    year,
+    rename,
+    dest_folder
+  });
 
   if (res.success) {
     const idx = S.files.findIndex(x => x.path === f.path);
     if (idx !== -1) {
       S.files[idx].status   = 'done';
       S.files[idx].path     = res.new_path;
-      S.files[idx].filename = res.new_path.split('/').pop();
+      S.files[idx].filename = res.new_path.replace(/\\/g, '/').split('/').pop();
       S.files[idx].tags     = {title, artist, album, year};
       S.selected = S.files[idx];
     }

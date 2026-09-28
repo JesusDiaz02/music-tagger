@@ -29,13 +29,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 def load_cache() -> dict:
     try:
-        return json.loads(CACHE_FILE.read_text()) if CACHE_FILE.exists() else {}
+        return json.loads(CACHE_FILE.read_text(encoding="utf-8")) if CACHE_FILE.exists() else {}
     except Exception:
         return {}
 
 
 def save_cache(cache: dict):
-    CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2))
+    CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def get_tags(path: str) -> dict:
@@ -99,6 +99,7 @@ class UpdateReq(BaseModel):
     album: str = ""
     year: str = ""
     rename: bool = False
+    dest_folder: str = ""
 
 
 def _pick_folder_sync() -> str:
@@ -158,7 +159,7 @@ def _pick_folder_sync() -> str:
 
 @app.get("/")
 async def root():
-    return HTMLResponse((BASE_DIR / "index.html").read_text())
+    return HTMLResponse((BASE_DIR / "index.html").read_text(encoding="utf-8"))
 
 
 @app.post("/pick-folder")
@@ -192,14 +193,18 @@ async def scan(
             files.append({
                 "path": sp,
                 "filename": mp3.name,
-                "tags": get_tags(sp),
                 "identified": cached.get("identified"),
                 "status": status,
                 "error": cached.get("error"),
             })
 
     total = len(files)
-    return {"files": files[offset:offset + limit], "total": total, "counts": counts}
+    paginated_files = files[offset:offset + limit]
+    for f in paginated_files:
+        f["tags"] = get_tags(f["path"])
+
+    return {"files": paginated_files, "total": total, "counts": counts}
+
 
 
 @app.post("/identify")
@@ -237,6 +242,46 @@ async def update(req: UpdateReq):
             tags = ID3(req.file_path)
         except ID3NoHeaderError:
             tags = ID3()
+        except Exception as e:
+            # Si el tag existente está dañado (ej: "Header size not synchsafe"),
+            # intentamos reconstruir la estructura del MP3 usando ffmpeg
+            cleaned = False
+            try:
+                p = Path(req.file_path)
+                temp_path = p.parent / f"~temp_clean_{p.name}"
+                cmd = ["ffmpeg", "-y", "-i", str(p), "-map", "0:a", "-c", "copy", str(temp_path)]
+                
+                # Ocultar ventana de consola en Windows
+                startupinfo = None
+                if platform.system() == "Windows":
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = 0
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    startupinfo=startupinfo,
+                    timeout=30
+                )
+                if result.returncode == 0 and temp_path.exists() and temp_path.stat().st_size > 0:
+                    os.replace(temp_path, p)
+                    cleaned = True
+                else:
+                    if temp_path.exists():
+                        temp_path.unlink()
+            except Exception:
+                pass
+            
+            if cleaned:
+                try:
+                    tags = ID3(req.file_path)
+                except ID3NoHeaderError:
+                    tags = ID3()
+            else:
+                raise e
+
 
         for frame in ["TIT2", "TPE1", "TALB", "TDRC"]:
             tags.delall(frame)
@@ -247,13 +292,55 @@ async def update(req: UpdateReq):
         tags.save(req.file_path)
 
         new_path = req.file_path
-        if req.rename and req.title and req.artist:
-            old = Path(req.file_path)
-            safe = re.sub(r'[\\/:*?"<>|]', "", f"{req.artist} - {req.title}")
-            candidate = str(old.parent / f"{safe}.mp3")
-            if candidate != req.file_path:
-                old.rename(candidate)
-                new_path = candidate
+        old = Path(req.file_path)
+
+        if req.dest_folder and req.dest_folder.strip():
+            dest_dir = Path(req.dest_folder.strip())
+            os.makedirs(dest_dir, exist_ok=True)
+
+            if req.rename and req.title and req.artist:
+                safe = re.sub(r'[\\/:*?"<>|]', "", f"{req.artist} - {req.title}")
+                target_filename = f"{safe}.mp3"
+            else:
+                target_filename = old.name
+
+            dest_path = dest_dir / target_filename
+
+            # Gestionar colisión si el archivo ya existe en el destino
+            if dest_path.exists() and dest_path.resolve() != old.resolve():
+                base = dest_path.stem
+                ext = dest_path.suffix
+                counter = 1
+                while True:
+                    new_dest_path = dest_dir / f"{base} ({counter}){ext}"
+                    if not new_dest_path.exists():
+                        dest_path = new_dest_path
+                        break
+                    counter += 1
+
+            old.rename(dest_path)
+            new_path = str(dest_path)
+        else:
+            # Comportamiento original si no hay carpeta de destino seleccionada
+            if req.rename and req.title and req.artist:
+                safe = re.sub(r'[\\/:*?"<>|]', "", f"{req.artist} - {req.title}")
+                candidate = old.parent / f"{safe}.mp3"
+
+                # Gestionar colisión si el archivo ya existe en el mismo directorio
+                if candidate.exists() and candidate.resolve() != old.resolve():
+                    base = candidate.stem
+                    ext = candidate.suffix
+                    counter = 1
+                    while True:
+                        new_candidate = old.parent / f"{base} ({counter}){ext}"
+                        if not new_candidate.exists():
+                            candidate = new_candidate
+                            break
+                        counter += 1
+
+                if candidate != old:
+                    old.rename(candidate)
+                    new_path = str(candidate)
 
         cache = load_cache()
         cache[new_path] = {
