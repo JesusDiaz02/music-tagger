@@ -1,0 +1,11 @@
+# Temporales de ffmpeg
+ffcache*
+
+# Cache generado por la app
+music_cache.json
+
+# Entorno virtual y bytecode de Python
+.venv/
+venv/
+__pycache__/
+*.pyc
